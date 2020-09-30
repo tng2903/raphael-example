@@ -17,25 +17,36 @@ var drawer = {
 };
 
 var sqrt = Math.sqrt;
-var max  = Math.max;
-var abs  = Math.abs;
+var max = Math.max;
+var abs = Math.abs;
 
-var selectedColor = cc.color(0,157,236);
+var selectedColor = cc.color(0, 157, 236);
+
+class Fragment {
+    constructor(length, pointIndex, subPointIndex) {
+        this.length = length;
+        this.pointIndex = pointIndex;
+        this.subPointIndex = subPointIndex;
+    }
+}
 
 
 var PathDefine = {
     extends: cc.Component,
 
     properties: {
+        shouldRender: true,
+        isClosedPath: false,
         _dirty: {
             default: true,
             serializable: false,
             notify: function () {
                 if (this.parent && this._dirty) {
                     this.parent._dirty = true;
-                    
+
                     if (this._commands) {
                         this._commands.points = undefined;
+                        this._commands.fragments = undefined;
                     }
                 }
             }
@@ -59,9 +70,9 @@ var PathDefine = {
         this.init();
 
         if (!this.ctx) {
-            let _gNode = new cc.Node();
-            this.ctx = _gNode.addComponent(cc.Graphics);
-            this.node.addChild(_gNode);
+            //this.ctx = new _ccsg.GraphicsNode();
+            //this.node._sgNode.addChild(this.ctx);
+            this.ctx = this.node.addComponent(cc.Graphics);
 
             this._applyStyle();
         }
@@ -72,12 +83,14 @@ var PathDefine = {
         if (!ry) {
             ry = rx;
         }
-        
+
         let cmds = this._commands;
         cmds.push(['M', cx, cy]);
         cmds.push(['m', 0, -ry]);
         cmds.push(['a', rx, ry, 0, 1, 1, 0, 2 * ry]);
         cmds.push(['a', rx, ry, 0, 1, 1, 0, -2 * ry]);
+
+        this.isClosedPath = true;
         // cmds.push(['z']);
     },
 
@@ -87,6 +100,7 @@ var PathDefine = {
 
     rect: function (x, y, w, h, r) {
         let cmds = this._commands;
+        this.isClosedPath = true;
 
         if (r) {
             cmds.push(['M', x + r, y]);
@@ -98,12 +112,14 @@ var PathDefine = {
             cmds.push(['a', r, r, 0, 0, 1, -r, -r]);
             cmds.push(['l', 0, r * 2 - h]);
             cmds.push(['a', r, r, 0, 0, 1, r, -r]);
-        }
-        else {
+        } else {
             cmds.push(['M', x, y]);
             cmds.push(['l', w, 0]);
             cmds.push(['l', 0, h]);
             cmds.push(['l', -w, 0]);
+
+            // cmds.push(['l', 0, -h]);
+            //cmds.push(['l', w, 0]);
         }
 
         cmds.push(['z']);
@@ -111,6 +127,7 @@ var PathDefine = {
 
     close: function () {
         this._commands.push(['Z']);
+        this.isClosedPath = true;
     },
 
     points: function (points, closed) {
@@ -161,17 +178,69 @@ var PathDefine = {
         return string;
     },
 
+    forceAnalysis: function (forceClosePath) {
+        this._analysis(forceClosePath);
+    },
+
     getTotalLength: function () {
         if (this._commands.totalLength === undefined) {
-            this._analysis();
+            this._analysis(this.isClosedPath);
         }
 
         return this._commands.totalLength;
     },
 
+    getFragments: function () {
+        if (this._commands.totalLength === undefined) {
+            this._analysis(this.isClosedPath);
+        }
+        // cc.log(this._commands.points);
+        // cc.log(this._commands);
+
+        return this._commands.fragments;
+    },
+
+    getPointAtLengthRelative: function (percent) {
+        if (this._commands.totalLength === undefined) {
+            this._analysis(this.isClosedPath);
+        }
+
+        let length = percent * this._commands.totalLength;
+        return this.getPointAtLength(length);
+    },
+
+    getPointAtLength: function (length) {
+        if (this._commands.totalLength === undefined) {
+            this._analysis(this.isClosedPath);
+        }
+
+        var lastFragment, currentFragment;
+        for (let index = 0; index < this._commands.fragments.length; index++) {
+            const frag = this._commands.fragments[index];
+            if (length <= frag.length) {
+                if (index > 0) {
+                    lastFragment = this._commands.fragments[index - 1];
+                }
+                currentFragment = frag;
+                break;
+            }
+        }
+
+        if (currentFragment) {
+            if (lastFragment) {
+                // cc.log(`-moving from ${lastFragment.x},${lastFragment.y} to ${currentFragment.x},${currentFragment.y}, length ${length}`);
+                return cc.v2(lastFragment.x, lastFragment.y).lerp(cc.v2(currentFragment.x, currentFragment.y), (length - lastFragment.length) / (currentFragment.length - lastFragment.length));
+            } else {
+                return cc.Vec2.ZERO.lerp(cc.v2(currentFragment.x, currentFragment.y), length / currentFragment.length);
+            }
+        } else {
+            return undefined;
+        }
+    },
+
     getBbox: function () {
         if (this._commands.bbox === undefined) {
-            this._analysis();
+            this._analysis(this.isClosedPath);
         }
 
         return this._commands.bbox;
@@ -179,7 +248,7 @@ var PathDefine = {
 
     getWorldBbox: function () {
         if (this._commands.worldBbox === undefined || this._transformDirty) {
-            this._analysis();
+            this._analysis(this.isClosedPath);
         }
 
         return this._commands.worldBbox;
@@ -188,9 +257,11 @@ var PathDefine = {
     center: function (x, y) {
         x = x || 0;
         y = y || 0;
-        
+
         var bbox = this.getBbox();
-        this.position = this.position.add(cc.v2(-bbox.width/2 - bbox.x + x, -bbox.height/2 - bbox.y + y));
+
+        // this.position = this.position.add(cc.v2(-bbox.width/2 - bbox.x + x, -bbox.height/2 - bbox.y + y));
+        this.position.addSelf(cc.v2(-bbox.width / 2 - bbox.x + x, -bbox.height / 2 - bbox.y + y));
     },
 
     _curves: function () {
@@ -204,15 +275,14 @@ var PathDefine = {
         for (var i = 0, ii = cmds.length; i < ii; i++) {
             var cmd = cmds[i];
             var c = cmd[0];
-            
+
             if (c === 'M') {
                 subCurves = [];
                 curves.push(subCurves);
 
                 x = cmd[1];
                 y = cmd[2];
-            }
-            else if (c === 'C' && x !== undefined && y !== undefined) {
+            } else if (c === 'C' && x !== undefined && y !== undefined) {
                 subCurves.push([x, y, cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]]);
 
                 x = cmd[5];
@@ -224,7 +294,7 @@ var PathDefine = {
         return curves;
     },
 
-    _analysis: function () {
+    _analysis: function (forceClosePath) {
         var cmds = this._commands;
         if (cmds.points) {
             return;
@@ -233,9 +303,10 @@ var PathDefine = {
         var curves = this._curves();
 
         var points = [];
+        var fragments = [];
         var x, y;
         var subPoints;
-        var tessTolSclae = 1/max(abs(this.scale.x), abs(this.scale.y));
+        var tessTolSclae = 1 / max(abs(this.scale.x), abs(this.scale.y));
 
         for (var i = 0, ii = curves.length; i < ii; i++) {
             var subCurves = curves[i];
@@ -251,17 +322,22 @@ var PathDefine = {
         cmds.points = points;
 
         var totalLength = 0;
-        var lastx, lasty;
-        var dx, dy;
-        var minx = 10e7, miny = 10e7, 
-            maxx = -10e7, maxy = -10e7;
+        var lastx, lasty, firstx, firsty;
+        var dx, dy, i, j;
+        var minx = 10e7,
+            miny = 10e7,
+            maxx = -10e7,
+            maxy = -10e7;
 
-        for (var i = 0, ii = points.length; i < ii; i++) {
+        // cc.log(cmds);
+        // cc.log(points);
+        for (i = 0; i < points.length; i++) {
             subPoints = points[i];
+            // cc.log(`Point index ${i}, value ${points[i]}, num subpoint ${subPoints.length}`);
 
-            for (var j = 0, jj = subPoints.length / 2; j < jj; j++) {
-                x = subPoints[j*2];
-                y = subPoints[j*2 + 1];
+            for (j = 0; j < subPoints.length / 2; j++) {
+                x = subPoints[j * 2];
+                y = subPoints[j * 2 + 1];
 
                 if (x < minx) minx = x;
                 if (x > maxx) maxx = x;
@@ -274,25 +350,54 @@ var PathDefine = {
                     lasty = y;
                 }
 
+                if (i == 0 && j == 0) {
+                    firstx = x;
+                    firsty = y;
+                }
+
                 dx = x - lastx;
                 dy = y - lasty;
 
-                totalLength += sqrt(dx*dx + dy*dy);
+
+                totalLength += sqrt(dx * dx + dy * dy);
+                // cc.log(`--Point ${j}, location (${x}, ${y})`);
+                let frag = new Fragment(totalLength, i, j);
+                frag.x = x;
+                frag.y = y;
+                fragments.push(frag);
 
                 lastx = x;
                 lasty = y;
             }
+
+            // cc.log(`Total length ${totalLength}`);
         }
 
+        // closed path
+        if (forceClosePath === true) {
+            dx = lastx - firstx;
+            dy = lasty - firsty;
+            totalLength += sqrt(dx * dx + dy * dy);
+            let frag = new Fragment(totalLength, i, j);
+            frag.x = firstx;
+            frag.y = firsty;
+            // cc.log(`--Last point location (${firstx}, ${firsty})`);
+            fragments.push(frag);
+            // cc.log(`Total length ${totalLength}`);
+        }
+
+        cmds.fragments = fragments;
         cmds.totalLength = totalLength;
 
         if (totalLength === 0) {
-            cmds.bbox = cmds.worldBbox = cc.rect();
-        }
-        else {
+            cmds.bbox = cc.rect();
+            cmds.worldBbox = cc.rect();
+        } else {
             var rect = cc.rect(minx, miny, maxx - minx, maxy - miny);
-            cmds.bbox = cc.AffineTransform.transformRect(cc.AffineTransform.identity, rect, this.getTransform());
-            cmds.worldBbox = cc.AffineTransform.transformRect(cc.AffineTransform.identity, rect, this.getWorldTransform());
+            cmds.bbox = cc.rect();
+            cmds.worldBbox = cc.rect();
+            cmds.bbox = cc.AffineTransform.transformRect(cmds.bbox, rect, this.getTransform());
+            cmds.worldBbox = cc.AffineTransform.transformRect(cmds.worldBbox, rect, this.getWorldTransform());
         }
     },
 
@@ -307,7 +412,7 @@ var PathDefine = {
             var c = cmd[0];
             cmd = this._transformCommand(cmd, t);
 
-            var func = ctx[ drawer[c] ];
+            var func = ctx[drawer[c]];
 
             if (func) func.apply(ctx, cmd);
         }
@@ -323,7 +428,7 @@ var PathDefine = {
 
         var originLineWidth = ctx.lineWidth;
         var originStrokeColor = ctx.strokeColor;
-        var originFillColor   = ctx.fillColor;
+        var originFillColor = ctx.fillColor;
 
         ctx.lineWidth = 1;
         ctx.strokeColor = selectedColor;
@@ -346,20 +451,19 @@ var PathDefine = {
 
             if (c === 'M') {
                 prev = cmd;
-            }
-            else if(c === 'C') {
+            } else if (c === 'C') {
                 drawHandle(prev[0], prev[1], cmd[0], cmd[1]);
                 drawHandle(cmd[4], cmd[5], cmd[2], cmd[3]);
                 prev = [cmd[4], cmd[5]];
             }
 
             if (prev)
-                ctx.fillRect(prev[0]-half, prev[1]-half, size, size);
+                ctx.fillRect(prev[0] - half, prev[1] - half, size, size);
         }
 
         ctx.lineWidth = originLineWidth;
         ctx.strokeColor = originStrokeColor;
-        ctx.fillColor   = originFillColor;
+        ctx.fillColor = originFillColor;
     },
 
     _drawDashPath: function () {
@@ -389,10 +493,12 @@ var PathDefine = {
         if (this._updateAnimate) {
             this._updateAnimate(dt);
         }
-        
-        if ( this._commands.length === 0 || !this._dirty || (this.parent && !this.parent._dirty)) {
+
+        if (this._commands.length === 0 || !this._dirty || (this.parent && !this.parent._dirty)) {
             return;
         }
+
+        if (!this.shouldRender) return;
 
         this._applyStyle();
 
@@ -407,11 +513,11 @@ var PathDefine = {
             }
 
             if (this.getStyledColor('strokeColor')) {
+                // this.ctx.beginPath();
                 this._drawDashPath();
                 this.ctx.stroke();
             }
-        }
-        else {
+        } else {
             this._drawCommands();
 
             if (this.getStyledColor('fillColor')) this.ctx.fill();
@@ -424,7 +530,7 @@ var PathDefine = {
             this.ctx.stroke();
         }
 
-        if ( this.showHandles ) this._drawHandles();
+        if (this.showHandles) this._drawHandles();
 
         this._dirty = false;
     }
@@ -432,11 +538,11 @@ var PathDefine = {
 
 var Path = cc.Class(utils.defineClass(PathDefine, trasform, style, smooth, simplify, animate));
 
-['M', 'm', 'L', 'l', 'H', 'h', 'V', 'v', 'C', 'c', 'S', 's', 'Q', 'q', 'T', 't', 'A', 'a', 'Z','z'].forEach(function (cmd) {
+['M', 'm', 'L', 'l', 'H', 'h', 'V', 'v', 'C', 'c', 'S', 's', 'Q', 'q', 'T', 't', 'A', 'a', 'Z', 'z'].forEach(function (cmd) {
     Path.prototype[cmd] = function () {
         var cmds = [cmd];
         for (var i = 0, l = arguments.length; i < l; i++) {
-            cmds[i+1] = arguments[i];
+            cmds[i + 1] = arguments[i];
         }
         this._commands.push(cmds);
     };

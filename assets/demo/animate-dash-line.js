@@ -3,7 +3,8 @@ cc.Class({
     extends: cc.Component,
 
     properties: {
-        duration: 2
+        duration: 2,
+        scale: cc.Vec2,
     },
 
     onLoad: function () {
@@ -12,7 +13,7 @@ cc.Class({
         path.lineWidth = 4;
         path.fillColor = 'none';
 
-        path.scale = cc.v2(4, -4);
+        path.scale = this.scale;
 
         this.path = path;
 
@@ -21,7 +22,7 @@ cc.Class({
         let i = 0;
         let self = this;
 
-        function animate () {
+        function animate() {
             let pathString = pathStrings[i];
             path.path(pathString);
 
@@ -35,7 +36,7 @@ cc.Class({
             path.dashOffset = self.pathLength;
             path.dashArray = [self.pathLength];
         }
-        
+
         animate();
         this.schedule(animate, this.duration * 1.5 * 1000);
     },
